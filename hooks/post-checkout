@@ -3,6 +3,11 @@
 
 $dir = str_replace('\\', '/', dirname(dirname(__DIR__))) . '/';
 
+if (is_dir($dir . '.git/rebase-merge')) {
+	// automatic checkout during rebase
+	exit;
+}
+
 $command = $dir . 'bin/phing';
 
 echo 'Running: ' . $command . "\n";
