@@ -1,0 +1,128 @@
+#!/usr/bin/php
+<?php
+
+/*
+Possible Git status letters are:
+A: addition of a file
+C: copy of a file into a new one
+D: deletion of a file
+M: modification of the contents or mode of a file
+R: renaming of a file
+T: change in the type of the file
+U: file is unmerged (you must complete the merge before it can be committed)
+X: "unknown" change type (most probably a bug, please report it)
+*/
+
+$dir = dirname(dirname(__DIR__)) . '/';
+
+// files added/changed/removed in commit
+exec('git diff --cached --name-status --diff-filter=ACM', $changes);
+
+$checkCs = file_exists($dir . '/bin/phpcs');
+$checkCsFiles = [];
+
+foreach ($changes as $change)
+{
+	list($status, $file) = explode("\t", $change);
+
+	if ($status === 'D') continue;
+
+	if (strstr($file, 'migrations/') !== FALSE)
+	{
+		checkMigration($dir . $file);
+	}
+	if (substr($file, -4) === '.php' || substr($file, -5) === '.phpt')
+	{
+		lintPhp($dir . $file);
+		if ($checkCs)
+		{
+			$checkCsFiles[] = $file;
+		}
+	}
+}
+
+if ($checkCs && $checkCsFiles)
+{
+	checkCs($checkCsFiles, $dir);
+}
+
+// ok
+exit(0);
+
+
+function lintPhp($file)
+{
+	$content = file_get_contents($file);
+	if (!$content)
+	{
+		echo "Cannot read file: $file";
+		exit(1);
+	}
+	$output = [];
+	exec('php -l ' . escapeshellarg($file), $output, $result);
+	if ($result)
+	{
+		echo "PHP syntax check failed on file: $file";
+		echo implode("\n", $output), "\n";
+		exit(1);
+	}
+}
+
+function checkCs(array $files, $dir)
+{
+	$files = implode(' ', array_map(function ($file) {
+		return escapeshellarg($file);
+	}, $files));
+	exec($dir . 'bin/phpcs --standard=build/cs-ruleset.xml --extensions=php --encoding=utf-8 -sp --tab-width=4 ' . $files, $output, $result);
+	if ($result)
+	{
+		echo "PHP coding standards check failed:";
+		echo implode("\n", $output), "\n";
+		exit(1);
+	}
+}
+
+function checkMigration($file)
+{
+	$content = file_get_contents($file);
+	if (!$content)
+	{
+		echo "Cannot read file: $file";
+		exit(1);
+	}
+
+	// foreign key name
+	if (preg_match('/ADD FOREIGN KEY \\(`?([a-z0-9_]+)`?\\) REFERENCES/i', $content, $m))
+	{
+		echo "Missing foreign key name for column `$m[1]` in file: $file";
+		exit(1);
+	}
+
+	// collation
+	if (preg_match("/`?([a-z0-9_]+)`? varchar\\([0-9]+\\) COLLATE '[a-z0-9_]+'/i", $content, $m))
+	{
+		echo "Redundant collation definition for column `$m[1]` in file: $file";
+		exit(1);
+	}
+
+	// view definer
+	if (preg_match("/DEFINER=`[a-z0-9_]+`@`[a-z0-9_]+` SQL SECURITY (DEFINER|INVOKER) VIEW `([a-z0-9_]+)`/i", $content, $m))
+	{
+		echo "View definer must not be specified for view `$m[2]` file: $file";
+		exit(1);
+	}
+
+	// view security
+	if (preg_match("/SQL SECURITY DEFINER VIEW `([a-z0-9_]+)`/i", $content, $m))
+	{
+		echo "View security must be 'INVOKER', not 'DEFINER' for view `$m[2]` file: $file";
+		exit(1);
+	}
+
+	// table `log`
+	if (preg_match("/CREATE TABLE `log`/", $content, $m))
+	{
+		echo "Cannot create a table named `log`, it would wake some nasty MySQL bugs, in file: $file";
+		exit(1);
+	}
+}
